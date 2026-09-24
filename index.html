@@ -3,6 +3,9 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
 <meta name="robots" content="noindex, nofollow">
 <meta name="theme-color" content="#8A2E3F">
 <meta name="mobile-web-app-capable" content="yes">
@@ -254,7 +257,8 @@ button,.btn,.chip,.link,a,label,[data-act],[data-tab]{touch-action:manipulation}
     <img id="loginLogo" class="logo" style="display:none" alt="">
     <h1 id="loginTitle">ניהול המוסד</h1>
     <p class="note" style="margin:0 0 18px">התחברות למערכת</p>
-    <label class="field"><span>שם משתמש</span><input id="lu" autocomplete="username"></label>
+    <label class="field"><span>קוד מוסד</span><input id="li" autocomplete="organization" dir="ltr" autocapitalize="none" spellcheck="false"></label>
+    <label class="field"><span>שם משתמש</span><input id="lu" autocomplete="username" autocapitalize="none"></label>
     <label class="field"><span>סיסמה</span><input id="lp" type="password" autocomplete="current-password"></label>
     <label class="row" style="margin:0 0 14px;font-size:14px;cursor:pointer"><input type="checkbox" id="lr" checked> להישאר מחובר במכשיר הזה</label>
     <button class="btn full" data-v="primary" id="loginBtn">כניסה</button>
@@ -284,9 +288,90 @@ const LAST={};const WQ={};
 const ARRKEYS={'tt:students':'students','tt:staff':'staff','tt:tasks':'tasks'};
 const month=d=>String(d||'').slice(0,7)||'none';
 const clone=o=>JSON.parse(JSON.stringify(o));
-async function initDB(){
-  if(!window.claude||typeof window.claude.use!=='function')return null;
-  try{return await window.claude.use('db');}catch(e){return null;}
+/* ===== Firebase ===== */
+const FB_CONFIG={apiKey:"AIzaSyC1T3SBl84VJ9iMhXTgxpO2N0Vcw5VJpdk",authDomain:"nihul-mosad.firebaseapp.com",projectId:"nihul-mosad",
+  storageBucket:"nihul-mosad.firebasestorage.app",messagingSenderId:"930039998457",appId:"1:930039998457:web:8d22bbc56c2feec9b2ff28"};
+const OWNER_UID='OPqeXR8eV9fR5Js5TmaEwTyjlZ82',OWNER_EMAIL='admin@nihul-mosad.app',MAIL_DOMAIN='nihul-mosad.app';
+let FS=null,AUTH=null;
+function ukey(u){
+  const t=String(u||'').trim(),l=t.toLowerCase();
+  if(/^[a-z0-9._-]+$/.test(l))return l;
+  return 'h'+Array.from(new TextEncoder().encode(t)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+function fsAdapter(base){
+  const wrap=x=>({id:x.id,exists:x.exists,data:()=>x.data()});
+  return {
+    doc:p=>{const r=FS.doc(base+'/'+p);return{get:async()=>wrap(await r.get()),set:d=>r.set(d),update:d=>r.set(d,{merge:true})};},
+    collection:p=>({get:async()=>{const q=await FS.collection(base+'/'+p).get();return{docs:q.docs.map(wrap)};}})
+  };
+}
+function fbErr(e){
+  const c=(e&&e.code)||'';
+  if(/invalid-credential|wrong-password|user-not-found|invalid-email|invalid-login/.test(c))return 'שם משתמש או סיסמה שגויים';
+  if(/too-many-requests/.test(c))return 'יותר מדי ניסיונות. נסו שוב בעוד כמה דקות';
+  if(/network-request-failed|unavailable/.test(c))return 'אין חיבור לשרת. בדקו את האינטרנט (או חסימה בנטפרי)';
+  if(/weak-password/.test(c))return 'הסיסמה חלשה מדי — לפחות 6 תווים';
+  if(/requires-recent-login/.test(c))return 'כדי להחליף סיסמה צריך להתנתק ולהיכנס מחדש, ואז לנסות שוב';
+  if(/permission-denied/.test(c))return 'אין הרשאה לפעולה הזו';
+  if(/email-already-in-use/.test(c))return 'שם המשתמש כבר קיים במערכת';
+  return 'שגיאה: '+(c||(e&&e.message)||'לא ידועה');
+}
+async function createAuthUser(inst,u,pass){
+  const app2=firebase.apps.find(a=>a.name==='second')||firebase.initializeApp(FB_CONFIG,'second');
+  const a2=app2.auth();
+  try{await a2.setPersistence(firebase.auth.Auth.Persistence.NONE);}catch(e){}
+  const email=ukey(u).slice(0,40)+'.'+Math.random().toString(36).slice(2,7)+'@'+inst+'.'+MAIL_DOMAIN;
+  const c=await a2.createUserWithEmailAndPassword(email,pass);
+  const id=c.user.uid;try{await a2.signOut();}catch(e){}
+  return {uid:id,email:email};
+}
+async function reloadMembers(){
+  const q=await FS.collection('insts/'+S.inst+'/members').get();
+  S.config.users=q.docs.map(d=>Object.assign({id:d.id},d.data())).filter(m=>m.active!==false)
+    .map(m=>({id:m.id,user:m.user,role:m.role==='admin'?'admin':'teacher',cls:m.cls||''}));
+}
+async function createInst(code,name,adminUid,adminUser,adminEmail,classes){
+  const b=FS.batch();
+  b.set(FS.doc('insts/'+code),{name:name,created:firebase.firestore.FieldValue.serverTimestamp()});
+  b.set(FS.doc('insts/'+code+'/members/'+adminUid),{user:adminUser,role:'admin',cls:'',active:true});
+  b.set(FS.doc('logins/'+code+'_'+ukey(adminUser)),{email:adminEmail,inst:code,key:ukey(adminUser)});
+  b.set(FS.doc('insts/'+code+'/store/config'),{v:{name:name,classes:classes||[],logo:'',domains:SEED_DOMAINS}});
+  await b.commit();
+}
+async function enterInst(inst,user,typed){
+  const owner=user.uid===OWNER_UID;
+  let mem=null;
+  try{mem=await FS.doc('insts/'+inst+'/members/'+user.uid).get();}catch(e){mem=null;}
+  const isMem=mem&&mem.exists&&mem.data().active!==false;
+  if(!isMem&&!owner){await AUTH.signOut();throw {code:'no-member'};}
+  let isnap=await FS.doc('insts/'+inst).get();
+  if(!isnap.exists){
+    if(!owner){await AUTH.signOut();throw {code:'no-inst'};}
+    if(!confirm('המוסד "'+inst+'" עוד לא קיים במערכת. ליצור אותו עכשיו?'))return false;
+    await createInst(inst,'תלמוד תורה',user.uid,typed||'admin',OWNER_EMAIL,SEED_CLASSES.slice());
+    isnap=await FS.doc('insts/'+inst).get();
+    mem=await FS.doc('insts/'+inst+'/members/'+user.uid).get();
+  }
+  const m=(mem&&mem.exists)?mem.data():{user:'בעל המערכת',role:'admin',cls:''};
+  S.inst=inst;S.owner=owner;S.instList=null;
+  DB=fsAdapter('insts/'+inst);
+  Object.keys(LAST).forEach(k=>delete LAST[k]);
+  let cfg=await load(K.config,null);
+  if(!cfg){cfg={name:(isnap.data()||{}).name||'המוסד',classes:[],logo:'',domains:SEED_DOMAINS};await save(K.config,cfg);}
+  S.config=cfg;
+  if(!S.config.domains||!S.config.domains.length)S.config.domains=SEED_DOMAINS;
+  if(!S.config.classes)S.config.classes=[];
+  await reloadMembers();
+  S.students=await load(K.students,[]);S.staff=await load(K.staff,[]);
+  S.att=await load(K.att,{});S.reviews=await load(K.reviews,[]);S.tasks=await load(K.tasks,[]);
+  S.me={id:user.uid,user:m.user,role:m.role==='admin'?'admin':'teacher',cls:m.cls||'',mustChange:false};
+  try{localStorage.setItem('tt:inst',inst);localStorage.setItem('tt:instName',S.config.name||'');}catch(e){}
+  S.tab='dash';S.markCls=myClasses()[0]||'';S.revCls=myClasses()[0]||'';S.filter='';S.repCls='';S.revIdx=null;
+  S.draft=Object.assign({},S.att[S.markDate]||{});S.dirty=false;
+  document.getElementById('login').style.display='none';
+  document.getElementById('shell').classList.add('on');
+  render();
+  return true;
 }
 function queued(path,fn){const p=(WQ[path]||Promise.resolve()).then(fn);WQ[path]=p.catch(()=>{});return p;}
 async function dbMerge(path,body){
@@ -330,7 +415,7 @@ async function load(key,fb){
       if(key===K.config){
         const sn=await DB.doc('store/config').get();
         if(!sn.exists)return fb;
-        const v=clone((sn.data()||{}).v||null);LAST[key]=JSON.stringify(v);return v||fb;
+        const v=clone((sn.data()||{}).v||null);if(v)delete v.users;LAST[key]=JSON.stringify(v);return v||fb;
       }
       if(key===K.att){
         const q=await DB.collection('att').get();const out={},L={};
@@ -364,8 +449,11 @@ async function save(key,val){
         LAST[key]={m:L,o:o};return;
       }
       if(key===K.config){
-        const j=JSON.stringify(val);if(LAST[key]===j)return;
-        await dbSet('store/config',{v:val});LAST[key]=j;return;
+        const cv=Object.assign({},val);delete cv.users;
+        const j=JSON.stringify(cv);if(LAST[key]===j)return;
+        await dbSet('store/config',{v:cv});LAST[key]=j;
+        if(FS&&S.inst&&cv.name)FS.doc('insts/'+S.inst).set({name:cv.name},{merge:true}).catch(()=>{});
+        return;
       }
       if(key===K.att){
         const prev=LAST[key]||{},by={};
@@ -472,35 +560,41 @@ function attStats(sid,from,to){
 function studentById(id){return S.students.find(s=>s.id===id);}
 
 async function doLogin(){
+  const inst=document.getElementById('li').value.trim().toLowerCase();
   const u=document.getElementById('lu').value.trim(),p=document.getElementById('lp').value;
-  const err=document.getElementById('loginErr');
-  const user=S.config.users.find(x=>x.user===u);
-  if(!user||user.pass!==await hash(p)){err.textContent='שם משתמש או סיסמה שגויים';return;}
-  err.textContent='';S.me=user;
-  try{sessionStorage.setItem('tt:session',user.id);}catch(e){}
-  try{if(document.getElementById('lr').checked)localStorage.setItem('tt:remember',user.id);else localStorage.removeItem('tt:remember');}catch(e){}
-  S.tab='dash';S.markCls=myClasses()[0]||'';S.revCls=myClasses()[0]||'';S.filter='';S.repCls='';
-  S.draft=Object.assign({},S.att[S.markDate]||{});
-  document.getElementById('login').style.display='none';
-  document.getElementById('shell').classList.add('on');
-  render();
+  const err=document.getElementById('loginErr'),btn=document.getElementById('loginBtn');
+  if(!inst||!u||!p){err.textContent='נא למלא קוד מוסד, שם משתמש וסיסמה';return;}
+  if(!FS){err.textContent='אין חיבור לשרת. בדקו את האינטרנט (או חסימה בנטפרי)';return;}
+  err.textContent='';btn.disabled=true;btn.textContent='מתחבר…';
+  try{
+    try{await AUTH.setPersistence(document.getElementById('lr').checked?firebase.auth.Auth.Persistence.LOCAL:firebase.auth.Auth.Persistence.SESSION);}catch(e){}
+    let email=null;
+    try{const l=await FS.doc('logins/'+inst+'_'+ukey(u)).get();if(l.exists)email=l.data().email;}catch(e){}
+    if(!email&&ukey(u)==='admin')email=OWNER_EMAIL;
+    if(!email)throw {code:'auth/invalid-credential'};
+    const cred=await AUTH.signInWithEmailAndPassword(email,p);
+    await enterInst(inst,cred.user,u);
+    document.getElementById('lp').value='';
+  }catch(e){
+    err.textContent=e&&e.code==='no-member'?'למשתמש הזה אין הרשאה למוסד הזה':e&&e.code==='no-inst'?'קוד המוסד לא נמצא':fbErr(e);
+  }finally{btn.disabled=false;btn.textContent='כניסה';}
 }
-function logout(){
-  S.me=null;try{sessionStorage.removeItem('tt:session');}catch(e){}try{localStorage.removeItem('tt:remember');}catch(e){}closeDrawer(true);
+async function logout(){
+  S.me=null;DB=null;closeDrawer(true);
+  try{if(AUTH)await AUTH.signOut();}catch(e){}
   document.getElementById('shell').classList.remove('on');
   document.getElementById('login').style.display='flex';
   document.getElementById('lp').value='';document.getElementById('lu').value='';
-  document.getElementById('lu').focus();
+  paintLogin();document.getElementById('lu').focus();
 }
 function paintLogin(){
-  document.getElementById('loginTitle').textContent=S.config.name;
-  const l=document.getElementById('loginLogo');
-  if(S.config.logo){l.src=S.config.logo;l.style.display='block';}else l.style.display='none';
-  const admin=S.config.users.find(u=>u.role==='admin');
-  document.getElementById('loginHint').textContent=(admin&&admin.mustChange)?('משתמש ראשוני: '+admin.user+' · סיסמה: 1234'):'';
+  let nm='';try{nm=localStorage.getItem('tt:instName')||'';}catch(e){}
+  document.getElementById('loginTitle').textContent=nm||'ניהול המוסד';
+  document.getElementById('loginLogo').style.display='none';
+  document.getElementById('loginHint').textContent='';
 }
 document.getElementById('loginBtn').addEventListener('click',doLogin);
-['lu','lp'].forEach(id=>document.getElementById(id).addEventListener('keydown',e=>{if(e.key==='Enter')doLogin();}));
+['li','lu','lp'].forEach(id=>document.getElementById(id).addEventListener('keydown',e=>{if(e.key==='Enter')doLogin();}));
 
 function contactPhone(s){return s.fatherPhone||s.motherPhone||'';}
 function contactName(s){return s.fatherPhone?(s.father||'האב'):(s.mother||'האם');}
@@ -966,6 +1060,7 @@ function viewSettings(){
     '<div class="row" style="margin-bottom:12px">'+domains().map(d=>'<span class="chip" style="cursor:default">'+esc(d.name)+
       '<button class="btn sm" data-v="ghost" style="padding:0 4px" data-act="del-dom" data-id="'+d.id+'">✕</button></span>').join('')+'</div>'+
     '<div class="row"><input class="inp" id="newDom" placeholder="למשל: שקידה"><button class="btn" data-act="add-dom">הוספה</button></div></div>'+
+  ownerCard()+
   '<div class="card"><h3>משתמשים והרשאות</h3>'+
     '<p class="note" style="margin-bottom:12px">מנהל רואה את כל המוסד. מלמד רואה רק את הכיתה שלו, בלי גישה לצוות ולהגדרות.</p>'+
     table(['שם משתמש','הרשאה','כיתה',''],S.config.users.map(u=>
@@ -984,6 +1079,23 @@ function viewSettings(){
     '<input type="file" id="restoreFile" accept=".json" style="display:none"></div></div>'+
   '<div class="card"><h3>איפוס</h3><p class="note" style="margin-bottom:12px">מוחק תלמידים, צוות, נוכחות, תמונות מצב ומשימות.</p>'+
     '<button class="btn" data-v="danger" data-act="wipe">מחיקת כל הנתונים</button></div>';
+}
+function ownerCard(){
+  if(!S.owner)return '';
+  if(!S.instList){
+    S.instList=[];
+    FS.collection('insts').get().then(q=>{S.instList=q.docs.map(d=>({code:d.id,name:(d.data()||{}).name||d.id}));if(S.tab==='settings')render();})
+      .catch(()=>{});
+  }
+  return '<div class="card"><h3>מוסדות במערכת</h3><p class="note" style="margin-bottom:12px">רק בעל המערכת רואה את החלק הזה. כל מוסד נפרד לגמרי, עם צוות ונתונים משלו.</p>'+
+    (S.instList.length?table(['קוד מוסד','שם',''],S.instList.map(i=>['<b dir="ltr">'+esc(i.code)+'</b>',esc(i.name),
+      i.code===S.inst?'<span class="tag">פתוח עכשיו</span>':'<button class="btn sm" data-act="inst-open" data-code="'+esc(i.code)+'">כניסה</button>'])):'<p class="note">טוען…</p>')+
+    '<h3 style="margin-top:16px">מוסד חדש</h3><div class="grid g2">'+
+      '<label class="field"><span>קוד מוסד (באנגלית)</span><input id="ni-code" dir="ltr" placeholder="למשל: beitar-boys" autocapitalize="none"></label>'+
+      '<label class="field"><span>שם המוסד</span><input id="ni-name"></label>'+
+      '<label class="field"><span>שם משתמש למנהל/ת</span><input id="ni-user" autocapitalize="none"></label>'+
+      '<label class="field"><span>סיסמה ראשונית</span><input id="ni-pass" type="text"></label>'+
+    '</div><div class="row"><button class="btn" data-v="primary" data-act="inst-new">יצירת המוסד</button></div></div>';
 }
 function userForm(){
   const e=S.editUser;
@@ -1195,18 +1307,66 @@ document.getElementById('main').addEventListener('click',async function(e){
     const g=i=>document.getElementById(i).value;
     const name=g('u-user').trim(),pass=g('u-pass'),role=g('u-role'),cls=g('u-cls');
     if(!name)return toast('צריך שם משתמש');
-    if(S.config.users.some(u=>u.user===name&&u.id!==S.editUser.id))return toast('שם המשתמש כבר קיים');
+    if(S.config.users.some(u=>ukey(u.user)===ukey(name)&&u.id!==S.editUser.id))return toast('שם המשתמש כבר קיים');
     if(role==='teacher'&&!cls)return toast('למלמד צריך לבחור כיתה');
     if(!S.editUser.id&&!pass)return toast('צריך סיסמה');
-    const o={id:S.editUser.id||uid(),user:name,role:role,cls:role==='admin'?'':cls,
-      pass:pass?await hash(pass):S.editUser.pass,mustChange:pass?false:S.editUser.mustChange};
-    S.config.users=S.editUser.id?S.config.users.map(u=>u.id===o.id?o:u):S.config.users.concat([o]);
-    if(S.me.id===o.id)S.me=o;
-    save(K.config,S.config);S.editUser=null;toast('המשתמש נשמר');return render();
+    if(pass&&pass.length<6)return toast('סיסמה של 6 תווים לפחות');
+    if(S.editUser.id===S.me.id&&role!=='admin')return toast('אי אפשר להוריד לעצמך את הרשאת המנהל');
+    const base='insts/'+S.inst,data={user:name,role:role,cls:role==='admin'?'':cls,active:true};
+    toast('שומר…');
+    try{
+      if(!S.editUser.id){
+        const r=await createAuthUser(S.inst,name,pass);
+        const b=FS.batch();
+        b.set(FS.doc(base+'/members/'+r.uid),data);
+        b.set(FS.doc('logins/'+S.inst+'_'+ukey(name)),{email:r.email,inst:S.inst,key:ukey(name)});
+        await b.commit();
+      }else{
+        const old=S.config.users.find(u=>u.id===S.editUser.id);let id=old.id;
+        const lref=FS.doc('logins/'+S.inst+'_'+ukey(old.user));
+        let email=null;try{const l=await lref.get();if(l.exists)email=l.data().email;}catch(e){}
+        if(!email&&id===OWNER_UID)email=OWNER_EMAIL;
+        const b=FS.batch();
+        if(pass){
+          if(id===S.me.id)await AUTH.currentUser.updatePassword(pass);
+          else{const r=await createAuthUser(S.inst,name,pass);b.delete(FS.doc(base+'/members/'+id));id=r.uid;email=r.email;}
+        }
+        b.set(FS.doc(base+'/members/'+id),data);
+        if(ukey(name)!==ukey(old.user))b.delete(lref);
+        if(email)b.set(FS.doc('logins/'+S.inst+'_'+ukey(name)),{email:email,inst:S.inst,key:ukey(name)});
+        await b.commit();
+        if(S.me.id===id){S.me.user=name;S.me.cls=data.cls;}
+      }
+      await reloadMembers();S.editUser=null;toast('המשתמש נשמר');return render();
+    }catch(e){return toast(fbErr(e));}
   }
   if(a==='user-del'){
-    if(!confirm('למחוק את המשתמש?'))return;
-    S.config.users=S.config.users.filter(u=>u.id!==id);save(K.config,S.config);toast('המשתמש נמחק');return render();
+    if(id===S.me.id)return toast('אי אפשר למחוק את עצמך');
+    if(!confirm('למחוק את המשתמש? הוא לא יוכל להיכנס יותר.'))return;
+    const u=S.config.users.find(x=>x.id===id);if(!u)return;
+    try{
+      const b=FS.batch();b.delete(FS.doc('insts/'+S.inst+'/members/'+id));b.delete(FS.doc('logins/'+S.inst+'_'+ukey(u.user)));await b.commit();
+      await reloadMembers();toast('המשתמש נמחק');return render();
+    }catch(e){return toast(fbErr(e));}
+  }
+  if(a==='inst-open'){
+    const code=el.dataset.code;if(!code)return;
+    try{await enterInst(code,AUTH.currentUser,null);toast('עברת למוסד: '+S.config.name);}catch(e){toast(fbErr(e));}
+    return;
+  }
+  if(a==='inst-new'){
+    const g=i=>document.getElementById(i).value.trim();
+    const code=g('ni-code').toLowerCase(),name=g('ni-name'),au=g('ni-user'),ap=document.getElementById('ni-pass').value;
+    if(!/^[a-z0-9-]{2,30}$/.test(code))return toast('קוד מוסד: אותיות באנגלית קטנות, ספרות ומקף בלבד');
+    if(!name||!au||!ap)return toast('צריך למלא את כל השדות');
+    if(ap.length<6)return toast('סיסמה של 6 תווים לפחות');
+    try{
+      const ex=await FS.doc('insts/'+code).get();if(ex.exists)return toast('הקוד הזה כבר תפוס');
+      toast('יוצר מוסד…');
+      const r=await createAuthUser(code,au,ap);
+      await createInst(code,name,r.uid,au,r.email,[]);
+      S.instList=null;toast('המוסד נוצר. קוד: '+code+' · משתמש: '+au);return render();
+    }catch(e){return toast(fbErr(e));}
   }
   if(a==='save-name'){S.config.name=document.getElementById('cfgName').value.trim()||'המוסד';save(K.config,S.config);toast('השם עודכן');return render();}
   if(a==='add-cls'){
@@ -1252,11 +1412,9 @@ document.getElementById('main').addEventListener('change',function(e){
     const r=new FileReader();
     r.onload=function(){try{
       const d=JSON.parse(r.result);
-      S.config=d.config||S.config;S.students=d.students||[];S.staff=d.staff||[];
+      const keepUsers=S.config.users;S.config=Object.assign({},d.config||S.config,{users:keepUsers});S.students=d.students||[];S.staff=d.staff||[];
       S.att=d.att||{};S.reviews=d.reviews||[];S.tasks=d.tasks||[];
       [[K.config,S.config],[K.students,S.students],[K.staff,S.staff],[K.att,S.att],[K.reviews,S.reviews],[K.tasks,S.tasks]].forEach(p=>save(p[0],p[1]));
-      const me=S.config.users.find(u=>u.id===S.me.id)||S.config.users.find(u=>u.role==='admin');
-      if(me)S.me=me;else return logout();
       toast('הגיבוי נטען');render();
     }catch(err){toast('הקובץ לא תקין');}};
     r.readAsText(el.files[0]);return;
@@ -1277,36 +1435,24 @@ document.getElementById('main').addEventListener('input',function(e){
 });
 
 (async function(){
-  DB=await initDB();
-  document.getElementById('boot').style.display='none';
-  let cfg=await load(K.config,null);
-  if(!cfg||!cfg.users||!cfg.users.length){
-    const pass=await hash('1234');
-    const classes=(cfg&&cfg.classes&&cfg.classes.length)?cfg.classes:SEED_CLASSES.slice();
-    const users=[{id:uid(),user:'מנהל',role:'admin',cls:'',pass:pass,mustChange:true}];
-    classes.forEach(function(c){users.push({id:uid(),user:'מלמד-'+c.replace('כיתה ','').trim(),role:'teacher',cls:c,pass:pass,mustChange:true});});
-    S.config=Object.assign({name:'תלמוד תורה',classes:classes,logo:'',domains:SEED_DOMAINS},cfg||{},{users:users});
-    if(!S.config.domains||!S.config.domains.length)S.config.domains=SEED_DOMAINS;
-    S.students=(await load(K.students,null))||SEED_STUDENTS.slice();
-    S.staff=await load(K.staff,[]);S.att=await load(K.att,{});
-    S.reviews=await load(K.reviews,[]);S.tasks=await load(K.tasks,[]);
-    await save(K.config,S.config);await save(K.students,S.students);
-  }else{
-    S.config=cfg;
-    if(!S.config.domains||!S.config.domains.length)S.config.domains=SEED_DOMAINS;
-    S.students=await load(K.students,[]);S.staff=await load(K.staff,[]);
-    S.att=await load(K.att,{});S.reviews=await load(K.reviews,[]);S.tasks=await load(K.tasks,[]);
-  }
+  const boot=document.getElementById('boot');
+  let inst='';try{inst=localStorage.getItem('tt:inst')||'';}catch(e){}
+  document.getElementById('li').value=inst;
   paintLogin();
-  let sid=null;try{sid=sessionStorage.getItem('tt:session')||localStorage.getItem('tt:remember');}catch(e){}
-  const me=sid&&S.config.users.find(u=>u.id===sid);
-  if(me){
-    S.me=me;S.markCls=myClasses()[0]||'';S.revCls=myClasses()[0]||'';
-    S.draft=Object.assign({},S.att[S.markDate]||{});
-    document.getElementById('shell').classList.add('on');render();
-  }else{
+  if(!window.firebase){
+    boot.innerHTML='<div style="text-align:center;padding:20px;max-width:340px">לא הצלחתי לטעון את רכיבי ההתחברות.<br>בדקו את החיבור לאינטרנט, או שהכתובת gstatic.com חסומה בסינון.</div>';
+    return;
+  }
+  firebase.initializeApp(FB_CONFIG);
+  FS=firebase.firestore();AUTH=firebase.auth();
+  try{await FS.enablePersistence({synchronizeTabs:true});}catch(e){}
+  const user=await new Promise(r=>{const un=AUTH.onAuthStateChanged(x=>{un();r(x);});});
+  let ok=false;
+  if(user&&inst){try{ok=await enterInst(inst,user,null);}catch(e){}}
+  boot.style.display='none';
+  if(!ok){
     document.getElementById('login').style.display='flex';
-    document.getElementById('lu').focus();
+    document.getElementById(inst?'lu':'li').focus();
   }
 })();
 

@@ -247,6 +247,7 @@ button,.btn,.chip,.link,a,label,[data-act],[data-tab]{touch-action:manipulation}
 .swipe-hint{font-size:12.5px;color:var(--muted);text-align:center;margin-top:10px}
 @media(min-width:821px){.swipe-hint{display:none}}
 @media print{.topbar,.bnav,.backdrop{display:none!important}}
+.ltr{white-space:nowrap}
 </style>
 </head>
 <body>
@@ -764,7 +765,8 @@ function viewCard(){
       table(['','שם','טלפון'],[
         ['<span class="note">אב</span>',esc(s.father||'—'),s.fatherPhone?'<span class="ltr">'+esc(s.fatherPhone)+'</span>':'—'],
         ['<span class="note">אם</span>',esc(s.mother||'—'),s.motherPhone?'<span class="ltr">'+esc(s.motherPhone)+'</span>':'—']])+
-      (s.notes?'<p class="note" style="margin-top:10px">'+esc(s.notes)+'</p>':'')+'</div>'+
+      (s.notes?'<p class="note" style="margin-top:10px">'+esc(s.notes)+'</p>':'')+
+      (s.extra&&Object.keys(s.extra).length?'<h3 style="margin-top:16px">פרטים נוספים</h3>'+table(['',''],Object.keys(s.extra).map(k=>['<span class="note">'+esc(k)+'</span>',esc(s.extra[k])])):'')+'</div>'+
     '<div class="card"><h3>מגמה לפי תחום</h3>'+
       (last?trend.map(function(t){
         let d='';
@@ -844,6 +846,7 @@ function viewStudents(){
       '<label class="field"><span>שם האם</span><input id="f-mother" value="'+esc(e.mother)+'"></label>'+
       '<label class="field"><span>טלפון האם</span><input id="f-mphone" dir="ltr" value="'+esc(e.motherPhone)+'"></label>'+
       '</div><label class="field"><span>הערות</span><input id="f-notes" value="'+esc(e.notes)+'"></label>'+
+      (e.extra&&Object.keys(e.extra).length?'<div class="grid g2">'+Object.keys(e.extra).map(k=>'<label class="field"><span>'+esc(k)+'</span><input data-xkey="'+esc(k)+'" value="'+esc(e.extra[k])+'"></label>').join('')+'</div>':'')+
       '<div class="row"><button class="btn" data-v="primary" data-act="student-save">שמירה</button>'+
       '<button class="btn" data-v="ghost" data-act="student-cancel">ביטול</button>'+
       (e.id?'<button class="btn" data-v="danger" style="margin-right:auto" data-act="student-del" data-id="'+e.id+'">הסרת התלמיד</button>':'')+'</div></div>';
@@ -954,22 +957,37 @@ function viewImport(){
   const p=S.importPreview;
   let body;
   if(!p){
-    body='<p class="note" style="margin-bottom:14px">בחרו קובץ אקסל (xlsx) או CSV. הכותרות המזוהות: שם פרטי, שם משפחה, שם (מלא), כיתה, שם אב, טל אב, שם אם, טל אם.</p>'+
+    body='<p class="note" style="margin-bottom:14px">בחרו קובץ אקסל (xlsx) או CSV. המערכת תזהה את העמודות לבד, ותוכלו לתקן את ההתאמה לפני הייבוא. כל עמודה נוספת בקובץ (ת״ז, כתובת, תאריך לידה וכו׳) תישמר בכרטיס התלמיד.</p>'+
       '<div class="row"><button class="btn" data-v="primary" data-act="pick-file">בחירת קובץ</button>'+
       '<input type="file" id="importFile" accept=".xlsx,.xls,.csv" style="display:none"></div>';
-  }else if(p.error){
+  }else if(p.error&&!p.matrix){
     body='<p class="note" style="color:var(--absent)">'+esc(p.error)+'</p><div class="row" style="margin-top:12px"><button class="btn" data-act="import-reset">ניסיון נוסף</button></div>';
   }else{
-    body='<div class="grid g3" style="margin-bottom:14px">'+stat(p.rows.length,'תלמידים בקובץ','')+
-      stat(p.classes.length,'כיתות שזוהו','')+stat(p.noPhone,'ללא טלפון כלל',p.noPhone?'var(--late)':'var(--present)')+'</div>'+
-      '<p class="note" style="margin-bottom:10px">עמודות שזוהו: '+esc(p.matched.join(' · '))+'</p>'+
-      table(['שם','כיתה','אב','טלפון אב','אם','טלפון אם'],p.rows.slice(0,8).map(s=>
-        ['<b>'+esc(s.name)+'</b>',esc(s.cls),esc(s.father),'<span class="ltr">'+esc(s.fatherPhone)+'</span>',esc(s.mother),'<span class="ltr">'+esc(s.motherPhone)+'</span>']))+
-      (p.rows.length>8?'<p class="note">…ועוד '+(p.rows.length-8)+' שורות</p>':'')+
-      '<div class="row" style="margin-top:16px"><button class="btn" data-v="primary" data-act="import-replace">החלפת הרשימה כולה</button>'+
-      '<button class="btn" data-act="import-add">הוספה לרשימה הקיימת</button>'+
-      '<button class="btn" data-v="ghost" data-act="import-reset">ביטול</button></div>'+
-      '<p class="note" style="margin-top:10px">החלפה מלאה מוחקת גם נוכחות ותמונות מצב קיימות, כי המזהים משתנים.</p>';
+    const sample=i=>{for(let r=p.hr+1;r<p.matrix.length&&r<p.hr+40;r++){const x=String((p.matrix[r]||[])[i]==null?'':(p.matrix[r]||[])[i]).trim();if(x)return x;}return '';};
+    const mapCard='<h3>התאמת עמודות</h3><p class="note" style="margin-bottom:10px">בדקו שכל עמודה מהקובץ מגיעה למקום הנכון. עמודות שאין להן מקום קבוע יישמרו כ"שדה נוסף" בכרטיס התלמיד.</p>'+
+      table(['עמודה בקובץ','דוגמה','ייבוא אל'],p.head.map(function(h,i){
+        return ['<b>'+esc(h||('עמודה '+(i+1)))+'</b>','<span class="note">'+esc(sample(i).slice(0,40))+'</span>',
+          '<select data-map="'+i+'">'+IMP_TARGETS.map(t=>opt(t[1],t[0],p.map[i])).join('')+'</select>'];
+      }));
+    if(p.error){
+      body=mapCard+'<p class="note" style="color:var(--absent);margin-top:12px">'+(p.error==='nomap'?'צריך לסמן לפחות עמודה אחת של שם (שם פרטי, שם משפחה או שם מלא).':'לא נמצאו שורות עם שם תלמיד.')+'</p>'+
+        '<div class="row" style="margin-top:12px"><button class="btn" data-v="ghost" data-act="import-reset">ביטול</button></div>';
+    }else{
+      const xs={};p.rows.forEach(r=>Object.keys(r.extra||{}).forEach(k=>xs[k]=1));const xk=Object.keys(xs);
+      body='<div class="grid g3" style="margin-bottom:14px">'+stat(p.rows.length,'תלמידים בקובץ','')+
+        stat(p.classes.length,'כיתות שזוהו','')+stat(p.noPhone,'ללא טלפון כלל',p.noPhone?'var(--late)':'var(--present)')+'</div>'+
+        mapCard+
+        '<h3 style="margin-top:18px">תצוגה מקדימה</h3>'+
+        table(['שם','כיתה','אב','טלפון אב','אם','טלפון אם'].concat(xk.slice(0,4)),p.rows.slice(0,8).map(s=>
+          ['<b>'+esc(s.name)+'</b>',esc(s.cls),esc(s.father),'<span class="ltr">'+esc(s.fatherPhone)+'</span>',esc(s.mother),'<span class="ltr">'+esc(s.motherPhone)+'</span>']
+          .concat(xk.slice(0,4).map(k=>esc((s.extra||{})[k]||'')))))+
+        (xk.length>4?'<p class="note">ועוד '+(xk.length-4)+' שדות נוספים שיישמרו בכרטיס: '+esc(xk.slice(4).join(' · '))+'</p>':'')+
+        (p.rows.length>8?'<p class="note">…ועוד '+(p.rows.length-8)+' שורות</p>':'')+
+        '<div class="row" style="margin-top:16px"><button class="btn" data-v="primary" data-act="import-replace">החלפת הרשימה כולה</button>'+
+        '<button class="btn" data-act="import-add">הוספה לרשימה הקיימת</button>'+
+        '<button class="btn" data-v="ghost" data-act="import-reset">ביטול</button></div>'+
+        '<p class="note" style="margin-top:10px">החלפה מלאה מוחקת גם נוכחות ותמונות מצב קיימות, כי המזהים משתנים.</p>';
+    }
   }
   return '<div class="head"><div><h2>ייבוא תלמידים</h2><div class="sub">כרגע רשומים '+S.students.length+' תלמידים</div></div>'+
     '<button class="btn" data-v="ghost" data-act="goto-students">חזרה</button></div><div class="card">'+body+'</div>';
@@ -988,39 +1006,82 @@ function parseCSV(text){
   if(cur||row.length){row.push(cur);rows.push(row);}
   return rows.filter(r=>r.some(c=>String(c).trim()));
 }
-const COLMAP=[['first',['שם פרטי','פרטי']],['last',['שם משפחה','משפחה']],['full',['שם מלא','שם התלמיד','שם','name']],
-  ['cls',['כיתה','שיעור','כתה','class']],['father',['שם אב','שם האב','אב']],['fphone',['טל אב','טלפון אב','נייד אב','טל האב','טלפון האב']],
-  ['mother',['שם אם','שם האם','אם']],['mphone',['טל אם','טלפון אם','נייד אם','טל האם','טלפון האם']]];
+const IMP_TARGETS=[['first','שם פרטי'],['last','שם משפחה'],['full','שם מלא'],['cls','כיתה'],['father','שם האב'],['fphone','טלפון האב'],
+  ['mother','שם האם'],['mphone','טלפון האם'],['notes','הערות'],['extra','שדה נוסף (נשמר בכרטיס)'],['skip','לא לייבא']];
+function impNorm(h){return String(h==null?'':h).replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,'').replace(/[״"׳'.:_\-\/\\()]/g,' ').replace(/\s+/g,' ').trim().toLowerCase();}
+function guessTarget(h){
+  const n=impNorm(h);if(!n)return 'skip';
+  const toks=n.split(' '),has=(...w)=>w.some(x=>n.indexOf(x)>-1),tok=(...w)=>w.some(x=>toks.indexOf(x)>-1);
+  const phone=has('טל','נייד','פלאפון','סלולר','phone','mobile','cell');
+  const dad=tok('אב','האב','father','dad')||has('אבא');
+  const mom=tok('אם','האם','mother','mom')||has('אמא');
+  if(phone&&dad&&!mom)return 'fphone';
+  if(phone&&mom&&!dad)return 'mphone';
+  if(has('פרטי')||n==='first name'||n==='first')return 'first';
+  if(has('משפחה')||n==='last name'||n==='surname'||n==='last')return 'last';
+  if(dad&&!mom&&!phone)return 'father';
+  if(mom&&!dad&&!phone)return 'mother';
+  if(has('כיתה','כתה','שיעור','class'))return 'cls';
+  if(n==='שם'||has('שם מלא','שם התלמיד','שם תלמיד','שם הילד','student','name'))return 'full';
+  if(has('הערה','הערות','notes','remark'))return 'notes';
+  if(phone)return 'phone';
+  if(['מס','#','מספר','מס סידורי','מספר סידורי','no'].indexOf(n)>-1)return 'skip';
+  return 'extra';
+}
+function detectHeaderRow(m){
+  const lim=Math.min(m.length,12);
+  for(let r=0;r<lim;r++){
+    const cells=(m[r]||[]).filter(c=>String(c==null?'':c).trim()!=='');
+    if(cells.length<2)continue;
+    const g=(m[r]||[]).map(guessTarget);
+    if(g.some(t=>t==='first'||t==='last'||t==='full'))return r;
+  }
+  for(let r=0;r<lim;r++){if((m[r]||[]).filter(c=>String(c==null?'':c).trim()!=='').length>=2)return r;}
+  return 0;
+}
 function buildPreview(matrix){
+  matrix=(matrix||[]).filter(r=>Array.isArray(r));
   if(!matrix.length)return {error:'הקובץ ריק'};
-  const head=matrix[0].map(h=>String(h==null?'':h).replace(/[\u200e\u200f]/g,'').trim());
-  const idx={},matched=[];
-  COLMAP.forEach(function(pair){
-    for(let i=0;i<head.length;i++){
-      const h=head[i];
-      if(pair[1].indexOf(h)>-1||pair[1].some(n=>h.indexOf(n)===0)){
-        if(idx[pair[0]]===undefined){idx[pair[0]]=i;matched.push(h);}
-        break;
-      }
-    }
+  const hr=detectHeaderRow(matrix);
+  const width=Math.max.apply(null,matrix.map(r=>r.length));
+  const head=[];for(let i=0;i<width;i++)head.push(String(matrix[hr][i]==null?'':matrix[hr][i]).replace(/[\u200e\u200f]/g,'').trim());
+  const used={},map=head.map(function(h){
+    let t=guessTarget(h);
+    if(t!=='extra'&&t!=='skip'&&t!=='phone'){if(used[t])t='extra';else used[t]=1;}
+    return t;
   });
-  if(idx.full===undefined&&idx.first===undefined&&idx.last===undefined)
-    return {error:'לא נמצאה עמודת שם. ודאו ששורה 1 היא שורת כותרות.'};
+  map.forEach(function(t,i){if(t==='phone'){if(!used.fphone){map[i]='fphone';used.fphone=1;}else if(!used.mphone){map[i]='mphone';used.mphone=1;}else map[i]='extra';}});
+  // columns with header but no data at all -> skip
+  const p={matrix:matrix,hr:hr,head:head,map:map};
+  head.forEach(function(h,i){
+    if(!h){map[i]=matrix.slice(hr+1).some(r=>String(r[i]==null?'':r[i]).trim())?'extra':'skip';}
+  });
+  return computeImport(p);
+}
+function computeImport(p){
+  const m=p.matrix,map=p.map,head=p.head;
+  const col=t=>map.indexOf(t);
   const rows=[],classes={};let noPhone=0;
-  for(let r=1;r<matrix.length;r++){
-    const g=k=>idx[k]===undefined?'':String(matrix[r][idx[k]]==null?'':matrix[r][idx[k]]).replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,'').trim();
-    let name=idx.full!==undefined?g('full'):((g('first')+' '+g('last')).trim());
+  for(let r=p.hr+1;r<m.length;r++){
+    const row=m[r]||[];
+    const v=i=>i<0?'':String(row[i]==null?'':row[i]).replace(/[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g,'').trim();
+    const full=v(col('full')),fl=(v(col('first'))+' '+v(col('last'))).trim();
+    const name=(col('first')>-1||col('last')>-1)?(fl||full):full;
     if(!name)continue;
-    let cls=g('cls');
-    if(cls&&cls.length<=2&&cls.indexOf('כיתה')<0)cls='כיתה '+cls+(cls.slice(-1)===GER?'':GER);
-    const o={id:uid(),name:name,cls:cls,father:g('father'),fatherPhone:cleanPhone(g('fphone')),
-      mother:g('mother'),motherPhone:cleanPhone(g('mphone')),notes:''};
+    let cls=v(col('cls'));
+    {const bare=cls.replace(/['׳"״]/g,'').replace(/^כי?תה\s*/,'').trim();if(bare&&bare.length<=2&&!/\d/.test(bare))cls='כיתה '+bare+GER;}
+    const extra={};
+    map.forEach(function(t,i){if(t==='extra'){const x=v(i);if(x)extra[head[i]||('עמודה '+(i+1))]=x;}});
+    const o={id:uid(),name:name,cls:cls,father:v(col('father')),fatherPhone:cleanPhone(v(col('fphone'))),
+      mother:v(col('mother')),motherPhone:cleanPhone(v(col('mphone'))),notes:v(col('notes')),extra:extra};
+    if(!Object.keys(extra).length)delete o.extra;
     if(!o.fatherPhone&&!o.motherPhone)noPhone++;
     if(cls)classes[cls]=1;
     rows.push(o);
   }
-  if(!rows.length)return {error:'לא נמצאו שורות עם שם תלמיד'};
-  return {rows:rows,classes:Object.keys(classes).sort(),matched:matched,noPhone:noPhone};
+  p.rows=rows;p.classes=Object.keys(classes).sort();p.noPhone=noPhone;
+  p.error=(col('full')<0&&col('first')<0&&col('last')<0)?'nomap':(rows.length?null:'norows');
+  return p;
 }
 function loadSheetJS(){
   return new Promise(function(res,rej){
@@ -1040,7 +1101,9 @@ async function handleImportFile(file){
       try{X=await loadSheetJS();}
       catch(e){S.importPreview={error:'לקריאת קובץ אקסל צריך חיבור לאינטרנט בפעם הראשונה. אפשר גם לשמור באקסל כ־CSV UTF-8 ולייבא — זה עובד גם בלי אינטרנט.'};return render();}
       const wb=X.read(await file.arrayBuffer(),{type:'array'});
-      S.importPreview=buildPreview(X.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,raw:false,defval:''}));
+      let best=null;
+      wb.SheetNames.forEach(function(n){const mtx=X.utils.sheet_to_json(wb.Sheets[n],{header:1,raw:false,defval:''}).filter(r=>r.some(c=>String(c).trim()));if(!best||mtx.length>best.length)best=mtx;});
+      S.importPreview=buildPreview(best||[]);
     }
   }catch(e){S.importPreview={error:'לא הצלחתי לקרוא את הקובץ: '+e.message};}
   render();
@@ -1231,6 +1294,8 @@ document.getElementById('main').addEventListener('click',async function(e){
     const g=i=>document.getElementById(i).value;
     const o={id:S.editStudent.id||uid(),name:g('f-name').trim(),cls:g('f-cls'),father:g('f-father').trim(),
       fatherPhone:cleanPhone(g('f-fphone')),mother:g('f-mother').trim(),motherPhone:cleanPhone(g('f-mphone')),notes:g('f-notes').trim()};
+    const ex={};document.querySelectorAll('#main [data-xkey]').forEach(function(inp){const v=inp.value.trim();if(v)ex[inp.dataset.xkey]=v;});
+    if(Object.keys(ex).length)o.extra=ex;
     if(!o.name)return toast('צריך למלא שם');
     S.students=S.editStudent.id?S.students.map(s=>s.id===o.id?o:s):S.students.concat([o]);
     save(K.students,S.students);S.editStudent=null;toast('התלמיד נשמר');return render();
@@ -1392,6 +1457,11 @@ document.getElementById('main').addEventListener('click',async function(e){
 document.getElementById('main').addEventListener('change',function(e){
   const el=e.target;
   if(el.id==='importFile'&&el.files&&el.files[0])return handleImportFile(el.files[0]);
+  if(el.dataset&&el.dataset.map!==undefined&&S.importPreview&&S.importPreview.map){
+    const i=+el.dataset.map,t=el.value,p=S.importPreview;
+    if(['extra','skip'].indexOf(t)<0)p.map.forEach(function(x,j){if(j!==i&&x===t)p.map[j]='extra';});
+    p.map[i]=t;computeImport(p);return render();
+  }
   if(el.id==='logoFile'&&el.files&&el.files[0]){
     const r=new FileReader();
     r.onload=function(){

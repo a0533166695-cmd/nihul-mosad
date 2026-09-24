@@ -250,6 +250,13 @@ button,.btn,.chip,.link,a,label,[data-act],[data-tab]{touch-action:manipulation}
 .ltr{white-space:nowrap}
 
 /* ===== מערכת שעות ===== */
+.lrow{display:flex;width:100%;align-items:center;gap:10px;text-align:right;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:6px;cursor:pointer;font:inherit;color:inherit}
+.lrow:hover{background:var(--surface2)}
+.lrow[data-now="1"]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+.lrow .lr-main{flex:1;min-width:0}
+.lrow .lr-main b{display:block;font-size:15px}
+.lrow .lr-main span{display:block;font-size:13px;color:var(--muted)}
+
 .seg button[data-on="1"]:not([data-s]){background:var(--accent)}
 .chip[data-on="1"]{background:var(--accent);color:#fff;border-color:var(--accent)}
 .tt-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
@@ -310,7 +317,7 @@ table.tt td.add:hover{background:var(--surface2)}
 <div id="toast"></div>
 
 <script>
-const K={config:'tt:config',students:'tt:students',staff:'tt:staff',att:'tt:attendance',reviews:'tt:reviews',tasks:'tt:tasks',timetable:'tt:timetable'};
+const K={config:'tt:config',students:'tt:students',staff:'tt:staff',att:'tt:attendance',reviews:'tt:reviews',tasks:'tt:tasks',timetable:'tt:timetable',latt:'tt:latt'};
 /* ===== אחסון: מאגר משותף בענן (כשפתוח מהקישור) או הדפדפן (כקובץ) ===== */
 let DB=null;
 const LAST={};const WQ={};
@@ -357,7 +364,7 @@ async function createAuthUser(inst,u,pass){
 async function reloadMembers(){
   const q=await FS.collection('insts/'+S.inst+'/members').get();
   S.config.users=q.docs.map(d=>Object.assign({id:d.id},d.data())).filter(m=>m.active!==false)
-    .map(m=>({id:m.id,user:m.user,role:m.role==='admin'?'admin':'teacher',cls:m.cls||''}));
+    .map(m=>({id:m.id,user:m.user,role:m.role==='admin'?'admin':'teacher',cls:m.cls||'',teacher:m.teacher||''}));
 }
 async function createInst(code,name,adminUid,adminUser,adminEmail,classes){
   const b=FS.batch();
@@ -392,8 +399,8 @@ async function enterInst(inst,user,typed){
   if(!S.config.classes)S.config.classes=[];
   await reloadMembers();
   S.students=await load(K.students,[]);S.staff=await load(K.staff,[]);
-  S.att=await load(K.att,{});S.reviews=await load(K.reviews,[]);S.tasks=await load(K.tasks,[]);S.timetable=await load(K.timetable,[]);
-  S.me={id:user.uid,user:m.user,role:m.role==='admin'?'admin':'teacher',cls:m.cls||'',mustChange:false};
+  S.att=await load(K.att,{});S.reviews=await load(K.reviews,[]);S.tasks=await load(K.tasks,[]);S.timetable=await load(K.timetable,[]);S.latt=await load(K.latt,{});LIDX=null;
+  S.me={id:user.uid,user:m.user,role:m.role==='admin'?'admin':'teacher',cls:m.cls||'',teacher:m.teacher||'',mustChange:false};S.markLesson=null;S.markView='lessons';S.ttInit=0;S.ttMode='class';S.ttTeacher='';
   try{localStorage.setItem('tt:inst',inst);localStorage.setItem('tt:instName',S.config.name||'');}catch(e){}
   S.tab='dash';S.markCls=myClasses()[0]||'';S.revCls=myClasses()[0]||'';S.filter='';S.repCls='';S.revIdx=null;
   S.draft=Object.assign({},S.att[S.markDate]||{});S.dirty=false;
@@ -446,9 +453,9 @@ async function load(key,fb){
         if(!sn.exists)return fb;
         const v=clone((sn.data()||{}).v||null);if(v)delete v.users;LAST[key]=JSON.stringify(v);return v||fb;
       }
-      if(key===K.att){
-        const q=await DB.collection('att').get();const out={},L={};
-        q.docs.forEach(doc=>{const d=(doc.data()||{}).d||{};Object.keys(d).forEach(date=>{
+      if(key===K.att||key===K.latt){
+        const q=await DB.collection('att').get();const out={},L={},wantL=key===K.latt;
+        q.docs.forEach(doc=>{if((String(doc.id).charAt(0)==='L')!==wantL)return;const d=(doc.data()||{}).d||{};Object.keys(d).forEach(date=>{
           if(!d[date])return;const day={};Object.keys(d[date]).forEach(sid=>{if(d[date][sid]!=null)day[sid]=d[date][sid];});
           out[date]=day;L[date]=clone(day);});});
         LAST[key]=L;return out;
@@ -484,8 +491,8 @@ async function save(key,val){
         if(FS&&S.inst&&cv.name)FS.doc('insts/'+S.inst).set({name:cv.name},{merge:true}).catch(()=>{});
         return;
       }
-      if(key===K.att){
-        const prev=LAST[key]||{},by={};
+      if(key===K.att||key===K.latt){
+        const prev=LAST[key]||{},by={},pre=key===K.latt?'L':'';
         const dates=new Set(Object.keys(prev).concat(Object.keys(val||{})));
         dates.forEach(date=>{
           const a=prev[date]||{},b=(val||{})[date]||{},diff={};let ch=false;
@@ -494,7 +501,7 @@ async function save(key,val){
           if(ch){(by[month(date)]=by[month(date)]||{})[date]=diff;}
         });
         for(const mo of Object.keys(by)){
-          await dbMerge('att/'+mo,{d:by[mo]});
+          await dbMerge('att/'+pre+mo,{d:by[mo]});
           Object.keys(by[mo]).forEach(date=>{LAST[key]=LAST[key]||{};LAST[key][date]=clone((val||{})[date]||{});});
         }
         return;
@@ -559,7 +566,7 @@ const SEED_CLASSES=['כיתה א'+GER,'כיתה ב'+GER,'כיתה ג'+GER,'כי�
 const SEED_DOMAINS=[{id:'d1',name:'לימודים'},{id:'d2',name:'ריכוז והתמדה'},{id:'d3',name:'התנהגות'},{id:'d4',name:'חברתי'},{id:'d5',name:'תפילה וסדרים'}];
 
 const S={tab:'dash',me:null,config:{name:'המוסד',classes:[],logo:'',users:[],domains:[]},
-  students:[],staff:[],att:{},reviews:[],tasks:[],timetable:[],
+  students:[],staff:[],att:{},latt:{},reviews:[],tasks:[],timetable:[],markLesson:null,ldraft:{},ldirty:false,markView:'lessons',
   ttMode:'class',ttCls:'',ttTeacher:'',ttDay:null,ttSlot:null,ttEdit:null,ttImport:null,ttPeriods:false,
   markDate:iso(new Date()),markCls:'',draft:{},dirty:false,
   revCls:'',revDate:iso(new Date()),revList:[],revIdx:null,revDraft:null,revDone:0,
@@ -570,22 +577,50 @@ const S={tab:'dash',me:null,config:{name:'המוסד',classes:[],logo:'',users:[
 
 const ALL_TABS=[['dash','לוח בקרה'],['review','תמונת מצב'],['students','תלמידים'],['mark','נוכחות'],['schedule','מערכת שעות'],['tasks','משימות'],['messages','הודעות'],['reports','דוחות'],['staff','צוות'],['settings','הגדרות']];
 const isAdmin=()=>S.me&&S.me.role==='admin';
-const myClasses=()=>isAdmin()?S.config.classes:[S.me.cls];
-const myStudents=()=>isAdmin()?S.students:S.students.filter(s=>s.cls===S.me.cls);
-const tabsFor=()=>isAdmin()?ALL_TABS:ALL_TABS.filter(t=>['dash','review','students','mark','tasks','messages','reports'].indexOf(t[0])>-1);
+function homeroomOf(t){const h=S.config.homeroom||{};return S.config.classes.filter(c=>t&&h[c]===t);}
+const myClasses=()=>isAdmin()?S.config.classes:Array.from(new Set((S.me.cls?[S.me.cls]:[]).concat(homeroomOf(S.me.teacher))));
+function myLessonAll(){return S.timetable.filter(l=>l.teacher&&l.teacher===S.me.teacher);}
+const myStudents=()=>{
+  if(isAdmin())return S.students;
+  const mc=myClasses(),ok={};
+  S.students.forEach(s=>{if(mc.indexOf(s.cls)>-1)ok[s.id]=1;});
+  myLessonAll().forEach(l=>{if(l.type==='private')(l.students||[]).forEach(id=>ok[id]=1);else S.students.forEach(s=>{if((l.classes||[]).indexOf(s.cls)>-1)ok[s.id]=1;});});
+  return S.students.filter(s=>ok[s.id]);
+};
+const tabsFor=()=>isAdmin()?ALL_TABS:ALL_TABS.filter(t=>['dash','review','students','mark','schedule','tasks','messages','reports'].indexOf(t[0])>-1);
 const domains=()=>S.config.domains&&S.config.domains.length?S.config.domains:SEED_DOMAINS;
 
 /* ---- שליפות ---- */
 function reviewsOf(sid){return S.reviews.filter(r=>r.studentId===sid).sort((a,b)=>b.date<a.date?-1:1);}
 function lastReview(sid){const r=reviewsOf(sid);return r.length?r[r.length-1]:null;}
+let LIDX=null;
+function lidx(){
+  if(LIDX)return LIDX;LIDX={};
+  Object.keys(S.latt).forEach(function(d){const day=S.latt[d]||{};Object.keys(day).forEach(function(k){
+    const i=k.indexOf(':');if(i<0)return;const sid=k.slice(i+1),v=day[k];if(!v)return;
+    (LIDX[sid]=LIDX[sid]||[]).push({d:d,l:k.slice(0,i),v:v});});});
+  return LIDX;
+}
 function attStats(sid,from,to){
-  let p=0,l=0,a=0,x=0,t=0;
+  let p=0,l=0,a=0,x=0,t=0;const ld={};
+  (lidx()[sid]||[]).forEach(function(e){if(e.d<from||e.d>to)return;ld[e.d]=1;t++;
+    if(e.v==='present')p++;else if(e.v==='late')l++;else if(e.v==='absent')a++;else x++;});
   Object.keys(S.att).forEach(function(d){
-    if(d<from||d>to)return;
+    if(d<from||d>to||ld[d])return;
     const v=S.att[d][sid];if(!v)return;t++;
     if(v==='present')p++;else if(v==='late')l++;else if(v==='absent')a++;else x++;
   });
   return {present:p,late:l,absent:a,excused:x,total:t,pct:t?Math.round((p+l)/t*100):null};
+}
+function dayStatus(sid,date){
+  const es=(lidx()[sid]||[]).filter(e=>e.d===date);
+  if(es.length){
+    if(es.some(e=>e.v==='absent'))return 'absent';
+    if(es.some(e=>e.v==='late'))return 'late';
+    if(es.every(e=>e.v==='excused'))return 'excused';
+    return 'present';
+  }
+  return (S.att[date]||{})[sid]||'';
 }
 function studentById(id){return S.students.find(s=>s.id===id);}
 
@@ -634,10 +669,15 @@ function contactName(s){return s.fatherPhone?(s.father||'האב'):(s.mother||'ה
 function viewDash(){
   const today=iso(new Date()),day=S.att[today]||{},list=myStudents();
   const c={present:0,late:0,absent:0,excused:0,none:0};
-  list.forEach(s=>{c[day[s.id]||'none']++;});
+  list.forEach(s=>{c[dayStatus(s.id,today)||'none']++;});
   const from=daysAgo(30);
   const alerts=[];
-  myClasses().forEach(function(cls){
+  if(S.timetable.length){
+    const now=new Date(),hm=String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
+    const um=markableLessons(today).filter(l=>{const p=periods().find(x=>x.n===l.period);return p&&p.end&&p.end<=hm&&!lessonMarked(today,l).done;});
+    if(um.length)alerts.push({t:'נוכחות',x:um.length+' שיעורים שהסתיימו היום ועוד לא סומנה בהם נוכחות',act:'goto-mark'});
+  }
+  if(!S.timetable.length)myClasses().forEach(function(cls){
     const inC=list.filter(s=>s.cls===cls),m=inC.filter(s=>day[s.id]).length;
     if(inC.length&&m<inC.length)alerts.push({t:'נוכחות',x:cls+' — טרם סומנה היום ('+m+'/'+inC.length+')',act:'goto-mark',cls:cls});
   });
@@ -812,6 +852,110 @@ function viewCard(){
 }
 
 
+
+/* ================= נוכחות לפי שיעור ================= */
+function dow(date){return new Date(date+'T12:00:00').getDay();}
+function lessonsOn(date){const d=dow(date);return d>5?[]:S.timetable.filter(l=>l.day===d);}
+function markableLessons(date){
+  const ls=lessonsOn(date);
+  if(isAdmin())return ls;
+  const mc=myClasses();
+  return ls.filter(l=>(l.teacher&&l.teacher===S.me.teacher)||(l.classes||[]).some(c=>mc.indexOf(c)>-1));
+}
+function lessonStudents(l){
+  if(l.type==='private'){const ids=l.students||[];return {list:S.students.filter(s=>ids.indexOf(s.id)>-1),away:[]};}
+  const par=S.timetable.filter(o=>o.id!==l.id&&o.type==='private'&&o.day===l.day&&o.period===l.period);
+  const inC=S.students.filter(s=>(l.classes||[]).indexOf(s.cls)>-1),list=[],away=[];
+  inC.forEach(function(s){const pl=par.find(o=>(o.students||[]).indexOf(s.id)>-1);if(pl)away.push({s:s,l:pl});else list.push(s);});
+  return {list:list,away:away};
+}
+function lessonMarked(date,l){
+  const day=S.latt[date]||{},st=lessonStudents(l).list;
+  const m=st.filter(s=>day[l.id+':'+s.id]).length;
+  return {m:m,n:st.length,done:st.length>0&&m>=st.length};
+}
+function perLabel(n){const p=periods().find(x=>x.n===n);return p&&p.start?'\u2066'+p.start+(p.end?'–'+p.end:'')+'\u2069':'';}
+function viewMarkLessons(){
+  if(S.markLesson){const l=S.timetable.find(x=>x.id===S.markLesson);if(l)return viewMarkLesson(l);S.markLesson=null;}
+  const date=S.markDate,today=iso(new Date());
+  const canDay=isAdmin()||myClasses().length>0;
+  const clsOpts=isAdmin()?S.config.classes:myClasses();
+  let ls=markableLessons(date);
+  if(S.markCls&&clsOpts.indexOf(S.markCls)>-1)ls=ls.filter(l=>(l.classes||[]).indexOf(S.markCls)>-1||(!isAdmin()&&l.teacher===S.me.teacher&&false));
+  ls=ls.slice().sort((a,b)=>a.period-b.period||String(a.subject).localeCompare(String(b.subject),'he'));
+  const now=new Date(),hm=String(now.getHours()).padStart(2,'0')+':'+String(now.getMinutes()).padStart(2,'0');
+  const top='<div class="head"><div><h2>נוכחות</h2><div class="sub">'+gregLabel(date)+' · '+hebLabel(date)+' · יום '+(DAYS[dow(date)]||'שבת')+'</div></div></div>'+
+    '<div class="card"><div class="grid g2">'+
+      '<label class="field"><span>תאריך</span><input type="date" data-ch="markDate" value="'+date+'"></label>'+
+      (clsOpts.length?'<label class="field"><span>כיתה</span><select data-ch="markCls">'+opt(isAdmin()?'כל הכיתות':'השיעורים שלי','',S.markCls)+clsOpts.map(c=>opt(c,c,S.markCls)).join('')+'</select></label>':'')+'</div>'+
+      (canDay?'<div class="seg" style="max-width:320px"><button data-act="mark-view" data-v="lessons" data-on="'+(S.markView!=='day'?1:0)+'">רשימת שיעורים</button>'+
+        '<button data-act="mark-view" data-v="day" data-on="'+(S.markView==='day'?1:0)+'">תמונת יום לכיתה</button></div>':'')+'</div>';
+  if(dow(date)>5)return top+'<div class="card"><div class="empty">שבת קודש — אין שיעורים.</div></div>';
+  if(canDay&&S.markView==='day')return top+dayGrid(date);
+  if(!ls.length)return top+'<div class="card"><div class="empty">'+(S.me.teacher||isAdmin()?'אין שיעורים ביום הזה.':'החשבון שלך עוד לא קושר למורה במערכת השעות. בקשו מהמנהל לקשר אותו בהגדרות.')+'</div></div>';
+  let lastP=null,html='';
+  ls.forEach(function(l){
+    if(l.period!==lastP){html+='<div class="note" style="margin:14px 0 6px;font-weight:700">שיעור '+l.period+' · '+perLabel(l.period)+'</div>';lastP=l.period;}
+    const mk=lessonMarked(date,l),p=periods().find(x=>x.n===l.period)||{};
+    const past=date<today||(date===today&&p.end&&p.end<=hm),nowOn=date===today&&p.start&&p.start<=hm&&(!p.end||hm<p.end);
+    const tag=mk.done?'<span class="tag" data-s="present">סומן</span>':mk.m?'<span class="tag" data-s="late">'+mk.m+'/'+mk.n+'</span>':
+      (past?'<span class="tag" data-s="absent">לא סומן</span>':'<span class="note">'+(mk.n?mk.n+' תלמידים':'')+'</span>');
+    html+='<button class="lrow" data-act="lm-open" data-id="'+l.id+'"'+(nowOn?' data-now="1"':'')+'><div class="lr-main"><b>'+esc(l.subject||'(ללא מקצוע)')+
+      (l.type==='private'?' <em class="bd">פרטני</em>':'')+(nowOn?' <em class="bd" style="color:var(--accent)">עכשיו</em>':'')+'</b><span>'+
+      esc((l.classes||[]).join(', '))+(l.teacher?' · '+esc(l.teacher):'')+'</span></div>'+tag+'</button>';
+  });
+  return top+'<div class="card">'+html+'</div>';
+}
+function viewMarkLesson(l){
+  const st=lessonStudents(l),list=st.list.slice().sort((a,b)=>a.name.localeCompare(b.name,'he')),D=S.ldraft;
+  const done=list.filter(s=>D[s.id]).length;
+  return '<div class="head"><div><h2>'+esc(l.subject||'(ללא מקצוע)')+(l.type==='private'?' · פרטני':'')+'</h2><div class="sub">'+
+    esc((l.classes||[]).join(', '))+' · שיעור '+l.period+' ('+perLabel(l.period)+') · '+gregLabel(S.markDate)+(l.teacher?' · '+esc(l.teacher):'')+'</div></div>'+
+    '<button class="btn" data-v="ghost" data-act="lm-back">חזרה לשיעורים</button></div>'+
+    '<div class="card">'+(list.length?'<div class="row" style="margin-bottom:8px"><button class="btn sm" data-act="lm-all">סימון הכול כנוכחים</button><span class="note">'+done+' מתוך '+list.length+' סומנו</span></div>'+
+      list.map(s=>'<div class="mark"><div class="mark-name">'+esc(s.name)+'<em>'+esc(s.cls)+'</em></div><div class="seg">'+
+        STATUSES.map(x=>'<button data-act="lm-set" data-id="'+s.id+'" data-s="'+x[0]+'" data-on="'+(D[s.id]===x[0]?1:0)+'">'+x[1]+'</button>').join('')+'</div></div>').join('')
+      :'<div class="empty">'+(l.type==='private'?'לא נבחרו תלמידים לשיעור הפרטני הזה. אפשר לבחור אותם במערכת השעות.':'אין תלמידים בשיעור הזה.')+'</div>')+
+    (st.away.length?'<div style="margin-top:14px;border-top:1px solid var(--line);padding-top:10px"><div class="note" style="font-weight:700;margin-bottom:6px">בשיעור פרטני באותה שעה (לא נספרים כחסרים כאן)</div>'+
+      st.away.map(x=>'<div class="note">'+esc(x.s.name)+' · '+esc(x.l.subject||'')+(x.l.teacher?' אצל '+esc(x.l.teacher):'')+'</div>').join('')+'</div>':'')+'</div>'+
+    (list.length?'<div class="savebar"><span class="note">'+(S.ldirty?'יש שינויים שלא נשמרו':'הכול שמור')+'</span>'+
+      '<button class="btn" data-v="primary" data-act="lm-save" '+(S.ldirty?'':'disabled')+'>שמירת הנוכחות</button></div>':'');
+}
+function dayGrid(date){
+  const clsOpts=isAdmin()?S.config.classes:myClasses();
+  const cls=clsOpts.indexOf(S.markCls)>-1?S.markCls:clsOpts[0];
+  if(!cls)return '<div class="card"><div class="empty">אין כיתה להצגה.</div></div>';
+  const d=dow(date),P=periods(),day=S.latt[date]||{};
+  const stu=S.students.filter(s=>s.cls===cls).sort((a,b)=>a.name.localeCompare(b.name,'he'));
+  const sym={present:['✓','var(--present)'],late:['א','var(--late)'],absent:['✗','var(--absent)'],excused:['מ','var(--muted)']};
+  const rows=stu.map(function(s){
+    return '<tr><td style="white-space:nowrap"><button class="link" data-act="card" data-id="'+s.id+'">'+esc(s.name)+'</button></td>'+P.map(function(p){
+      const here=S.timetable.filter(l=>l.day===d&&l.period===p.n&&(l.type==='private'?(l.students||[]).indexOf(s.id)>-1:(l.classes||[]).indexOf(s.cls)>-1));
+      if(!here.length)return '<td></td>';
+      const priv=here.find(l=>l.type==='private'),l=priv||here[0],v=day[l.id+':'+s.id];
+      const t=(l.subject||'')+(priv?' (פרטני)':'');
+      return '<td title="'+esc(t)+'" style="text-align:center;font-weight:700;color:'+(v?sym[v][1]:'var(--muted)')+'">'+(v?sym[v][0]:'·')+(priv?'<sup style="color:var(--late)">פ</sup>':'')+'</td>';
+    }).join('')+'</tr>';
+  }).join('');
+  return '<div class="card"><h3>'+esc(cls)+' · '+gregLabel(date)+'</h3>'+
+    '<div class="scroll"><table><thead><tr><th>תלמיד</th>'+P.map(p=>'<th style="text-align:center">'+p.n+'</th>').join('')+'</tr></thead><tbody>'+rows+'</tbody></table></div>'+
+    '<p class="note" style="margin-top:8px">✓ נוכח · א איחור · ✗ חיסור · מ מאושר · · לא סומן · <span style="color:var(--late)">פ</span> בשיעור פרטני</p></div>';
+}
+async function markAction(a,el){
+  if(a==='mark-view'){S.markView=el.dataset.v;return render();}
+  if(a==='lm-open'){S.markLesson=el.dataset.id;const day=S.latt[S.markDate]||{};S.ldraft={};
+    Object.keys(day).forEach(k=>{if(k.indexOf(S.markLesson+':')===0)S.ldraft[k.slice(S.markLesson.length+1)]=day[k];});
+    S.ldirty=false;window.scrollTo(0,0);return render();}
+  if(a==='lm-back'){if(S.ldirty&&!confirm('יש שינויים שלא נשמרו. לחזור בלי לשמור?'))return;S.markLesson=null;S.ldirty=false;return render();}
+  if(a==='lm-set'){S.ldraft[el.dataset.id]=el.dataset.s;S.ldirty=true;return render();}
+  if(a==='lm-all'){const l=S.timetable.find(x=>x.id===S.markLesson);lessonStudents(l).list.forEach(s=>{S.ldraft[s.id]='present';});S.ldirty=true;return render();}
+  if(a==='lm-save'){
+    const lid=S.markLesson,day=Object.assign({},S.latt[S.markDate]||{});
+    Object.keys(S.ldraft).forEach(sid=>{if(S.ldraft[sid])day[lid+':'+sid]=S.ldraft[sid];});
+    S.latt[S.markDate]=day;LIDX=null;save(K.latt,S.latt);S.ldirty=false;toast('הנוכחות נשמרה');S.markLesson=null;return render();
+  }
+}
+
 /* ================= מערכת שעות ================= */
 const DAYS=['ראשון','שני','שלישי','רביעי','חמישי','שישי'];
 const DEF_PERIODS=[{n:1,start:'08:00',end:'09:00'},{n:2,start:'09:00',end:'09:50'},{n:3,start:'10:35',end:'11:20'},
@@ -839,6 +983,7 @@ function lessonChip(l){
 function viewSchedule(){
   const P=periods(),sel=S.ttSlot;
   if(S.ttImport)return ttImportView();
+  if(!isAdmin()&&!S.ttInit){S.ttInit=1;if(S.me.teacher){S.ttMode='teacher';S.ttTeacher=S.me.teacher;}}
   if(S.ttMode==='teacher'&&!S.ttTeacher)S.ttTeacher=teachersList()[0]||'';
   const head='<div class="head"><div><h2>מערכת שעות</h2><div class="sub">'+S.timetable.length+' שיעורים בשבוע · '+teachersList().length+' מורים</div></div>'+
     '<div class="row"><button class="btn" data-act="tt-pick-file">ייבוא מקובץ</button><input type="file" id="ttFile" accept=".xlsx,.xls" style="display:none">'+
@@ -853,7 +998,7 @@ function viewSchedule(){
     P.map(function(p){
       return '<tr><td class="pc"><b>'+p.n+'</b>'+esc(p.start||'')+(p.end?'–'+esc(p.end):'')+'</td>'+DAYS.map(function(_,d){
         const ls=lessonsAt(d,p.n),on=sel&&sel.day===d&&sel.period===p.n;
-        return '<td class="add'+(on?' sel':'')+'" data-act="tt-slot" data-day="'+d+'" data-p="'+p.n+'">'+(ls.length?ls.map(lessonChip).join(''):'<div class="tt-plus">+</div>')+'</td>';
+        return '<td class="'+(isAdmin()?'add':'')+(on?' sel':'')+'" data-act="tt-slot" data-day="'+d+'" data-p="'+p.n+'">'+(ls.length?ls.map(lessonChip).join(''):'<div class="tt-plus">+</div>')+'</td>';
       }).join('')+'</tr>';
     }).join('')+'</tbody></table></div>';
   // mobile: day by day
@@ -863,14 +1008,18 @@ function viewSchedule(){
       return '<div class="per" data-act="tt-slot" data-day="'+S.ttDay+'" data-p="'+p.n+'"'+(on?' style="background:var(--accent-soft)"':'')+'><div class="pc"><b>'+p.n+'</b>'+esc(p.start||'')+'</div><div class="ls">'+
         (ls.length?ls.map(lessonChip).join(''):'<span class="note">— אין שיעור · לחצו להוספה</span>')+'</div></div>';}).join('')+'</div>';
   const legend='<p class="note" style="margin-top:10px">לחצו על משבצת כדי להוסיף, לערוך או למחוק שיעור. <span style="color:var(--late);font-weight:700">כתום</span> = הוראה פרטנית · <span style="color:var(--absent);font-weight:700">מסגרת אדומה</span> = למורה יש שני שיעורים באותה שעה.</p>';
-  return head+(S.ttPeriods?periodsCard():'')+'<div class="card">'+modes+chips+grid+mob+legend+'</div>'+(sel?slotCard():'')+
+  const hr=S.config.homeroom||{};
+  const hrCard=isAdmin()?'<div class="card"><h3>מחנכי כיתות</h3><p class="note" style="margin-bottom:10px">המחנך רואה את כל מה שקורה בכיתה שלו, כולל נוכחות בכל השיעורים. מורה שאינו מחנך רואה רק את השיעורים שלו.</p><div class="grid g3">'+
+    S.config.classes.map(c=>'<label class="field"><span>'+esc(c)+'</span><select data-hr="'+esc(c)+'">'+opt('—','',hr[c]||'')+teachersList().map(t=>opt(t,t,hr[c]||'')).join('')+'</select></label>').join('')+'</div></div>':'';
+  if(!isAdmin())return '<div class="head"><div><h2>מערכת שעות</h2></div></div><div class="card">'+modes+chips+grid+mob+'</div>';
+  return head+(S.ttPeriods?periodsCard():'')+'<div class="card">'+modes+chips+grid+mob+legend+'</div>'+(sel?slotCard():'')+hrCard+
     '<div class="card"><h3>שנה חדשה</h3><p class="note" style="margin-bottom:10px">בתחילת שנה אפשר לרוקן את המערכת ולהזין מחדש (ידנית או מקובץ). התלמידים, הנוכחות והנתונים האחרים לא נמחקים.</p>'+
     '<button class="btn" data-v="danger" data-act="tt-clear">ריקון מערכת השעות</button></div>';
 }
 function slotCard(){
   const sl=S.ttSlot,p=periods().find(x=>x.n===sl.period)||{n:sl.period};
   const ls=S.timetable.filter(l=>l.day===sl.day&&l.period===sl.period&&ttFilter(l));
-  const title='יום '+DAYS[sl.day]+' · שיעור '+p.n+(p.start?' ('+p.start+(p.end?'–'+p.end:'')+')':'');
+  const title='יום '+DAYS[sl.day]+' · שיעור '+p.n+(p.start?' ('+perLabel(p.n)+')':'');
   let body=ls.length?ls.map(l=>'<div class="row" style="justify-content:space-between;align-items:flex-start;border-bottom:1px solid var(--line);padding:8px 0"><div style="flex:1;min-width:0">'+lessonChip(l)+'</div>'+
     '<div class="row" style="gap:4px"><button class="btn sm" data-act="tt-edit" data-id="'+l.id+'">עריכה</button><button class="btn sm" data-v="ghost" data-act="tt-del" data-id="'+l.id+'">מחיקה</button></div></div>').join(''):
     '<p class="note">אין שיעורים במשבצת הזו.</p>';
@@ -966,7 +1115,7 @@ function ttImportView(){
   return '<div class="head"><div><h2>ייבוא מערכת שעות</h2><div class="sub">בדקו את הסיכום לפני הטעינה. אחרי הטעינה אפשר לערוך כל שיעור.</div></div></div>'+
     '<div class="card"><div class="grid g3" style="margin-bottom:14px">'+stat(r.lessons.length,'שיעורים שבועיים','')+stat(r.teachers.length,'מורים','')+stat(r.periods.length,'שיעורים ביום','')+'</div>'+
     '<h3>כיתות</h3><p style="margin-bottom:10px">'+r.classes.map(c=>esc(c)+' <span class="note">('+(byCls[c]||0)+' שיעורים)</span>'+(newC.indexOf(c)>-1?' <span class="tag" data-s="late">כיתה חדשה</span>':'')).join(' · ')+'</p>'+
-    '<h3>מבנה יום</h3><p style="margin-bottom:10px">'+r.periods.map(p=>p.n+': '+esc(p.start)+'–'+esc(p.end)).join(' · ')+'</p>'+
+    '<h3>מבנה יום</h3><p style="margin-bottom:10px">'+r.periods.map(p=>p.n+': \u2066'+esc(p.start)+'–'+esc(p.end)+'\u2069').join(' · ')+'</p>'+
     '<h3>מורים</h3><p style="margin-bottom:10px">'+r.teachers.map(t=>esc(t)+(newT.indexOf(t)>-1?' <span class="note">(יתווסף לצוות)</span>':'')).join(' · ')+'</p>'+
     (r.privNoStu?'<p class="note" style="margin-bottom:10px;color:var(--late)">נמצאו '+r.privNoStu+' שיעורים פרטניים. בקובץ לא מופיע אילו תלמידים משתתפים בהם, ולכן אחרי הטעינה צריך לבחור אותם בכל שיעור פרטני.</p>':'')+
     (S.timetable.length?'<p class="note" style="margin-bottom:10px">הטעינה תחליף את מערכת השעות הקיימת ('+S.timetable.length+' שיעורים).</p>':'')+
@@ -974,6 +1123,7 @@ function ttImportView(){
 }
 function ttEnsureStaff(name){if(name&&!S.staff.some(x=>x.name===name)){S.staff=S.staff.concat([{id:uid(),name:name,role:'מורה',cls:'',phone:'',hours:'',start:''}]);return true;}return false;}
 async function ttAction(a,el){
+  if(!isAdmin()&&['tt-mode','tt-cls','tt-teacher','tt-day'].indexOf(a)<0)return;
   if(a==='tt-mode'){S.ttMode=el.dataset.m;S.ttSlot=null;S.ttEdit=null;return render();}
   if(a==='tt-cls'){S.ttCls=el.dataset.c;S.ttSlot=null;S.ttEdit=null;return render();}
   if(a==='tt-teacher'){S.ttTeacher=el.dataset.t;S.ttSlot=null;S.ttEdit=null;return render();}
@@ -1063,6 +1213,10 @@ function viewTasks(){
 
 /* ================= נוכחות ================= */
 function viewMark(){
+  if(S.timetable.length)return viewMarkLessons();
+  return viewMarkDaily();
+}
+function viewMarkDaily(){
   const list=myStudents().filter(s=>!S.markCls||s.cls===S.markCls);
   const done=list.filter(s=>S.draft[s.id]).length;
   return '<div class="head"><div><h2>סימון נוכחות</h2><div class="sub">'+gregLabel(S.markDate)+' · '+hebLabel(S.markDate)+'</div></div></div>'+
@@ -1098,7 +1252,7 @@ function viewStudents(){
       '<button class="btn" data-v="ghost" data-act="student-cancel">ביטול</button>'+
       (e.id?'<button class="btn" data-v="danger" style="margin-right:auto" data-act="student-del" data-id="'+e.id+'">הסרת התלמיד</button>':'')+'</div></div>';
   }
-  return printHead()+'<div class="head"><div><h2>תלמידים</h2><div class="sub">'+base.length+' רשומים'+(isAdmin()?'':' · '+esc(S.me.cls))+'</div></div>'+
+  return printHead()+'<div class="head"><div><h2>תלמידים</h2><div class="sub">'+base.length+' רשומים'+(isAdmin()?'':' · '+esc(myClasses().join(', ')||'התלמידים בשיעורים שלך'))+'</div></div>'+
     (isAdmin()?'<div class="row"><button class="btn" data-act="goto-import">ייבוא מאקסל</button><button class="btn" data-v="primary" data-act="student-new">הוספת תלמיד</button></div>':'')+'</div>'+form+
     '<div class="card"><div class="row" style="margin-bottom:12px">'+
       '<input class="inp" style="flex:1;min-width:160px" id="q" placeholder="חיפוש לפי שם או טלפון" value="'+esc(S.q)+'" data-in="q">'+
@@ -1138,7 +1292,7 @@ function viewStaff(){
 }
 function recipients(){
   const today=iso(new Date()),day=S.att[today]||{},base=myStudents();
-  if(S.msgGroup==='absent')return base.filter(s=>day[s.id]==='absent');
+  if(S.msgGroup==='absent')return base.filter(s=>dayStatus(s.id,today)==='absent');
   if(S.msgGroup.indexOf('cls:')===0)return base.filter(s=>s.cls===S.msgGroup.slice(4));
   return base;
 }
@@ -1172,7 +1326,7 @@ function viewMessages(){
         :'<div class="empty">אין נמענים בקבוצה הזו.</div>')+'</div>';
 }
 function reportRows(){
-  const dates=Object.keys(S.att).filter(d=>d>=S.repFrom&&d<=S.repTo).sort();
+  const dates=Array.from(new Set(Object.keys(S.att).concat(Object.keys(S.latt)))).filter(d=>d>=S.repFrom&&d<=S.repTo).sort();
   const rows=myStudents().filter(s=>!S.repCls||s.cls===S.repCls).map(function(s){
     const a=attStats(s.id,S.repFrom,S.repTo);
     return Object.assign({},s,a,{pct:a.pct===null?0:a.pct});
@@ -1373,9 +1527,9 @@ function viewSettings(){
     '<div class="row"><input class="inp" id="newDom" placeholder="למשל: שקידה"><button class="btn" data-act="add-dom">הוספה</button></div></div>'+
   ownerCard()+
   '<div class="card"><h3>משתמשים והרשאות</h3>'+
-    '<p class="note" style="margin-bottom:12px">מנהל רואה את כל המוסד. מלמד רואה רק את הכיתה שלו, בלי גישה לצוות ולהגדרות.</p>'+
-    table(['שם משתמש','הרשאה','כיתה',''],S.config.users.map(u=>
-      ['<b>'+esc(u.user)+'</b>','<span class="tag" data-s="'+u.role+'">'+(u.role==='admin'?'מנהל':'מלמד')+'</span>',esc(u.cls||'כל המוסד'),
+    '<p class="note" style="margin-bottom:12px">מנהל רואה את כל המוסד. מורה רואה את השיעורים שלו, ואם הוא מחנך גם את כל מה שקורה בכיתה שלו. מחנכים מגדירים בלשונית "מערכת שעות".</p>'+
+    table(['שם משתמש','הרשאה','מורה במערכת',''],S.config.users.map(u=>
+      ['<b>'+esc(u.user)+'</b>','<span class="tag" data-s="'+u.role+'">'+(u.role==='admin'?'מנהל':'מורה')+'</span>',esc(u.role==='admin'?(u.teacher||'כל המוסד'):(u.teacher||'— לא קושר')),
        '<button class="btn sm" data-v="ghost" data-act="user-edit" data-id="'+u.id+'">עריכה</button>'+
        (u.id===S.me.id?'':'<button class="btn sm" data-v="ghost" data-act="user-del" data-id="'+u.id+'">מחיקה</button>')]))+
     (S.editUser?userForm():'<div class="row" style="margin-top:12px"><button class="btn" data-act="user-new">הוספת משתמש</button></div>')+'</div>'+
@@ -1414,8 +1568,8 @@ function userForm(){
   '<div class="grid g2">'+
     '<label class="field"><span>שם משתמש</span><input id="u-user" value="'+esc(e.user)+'"></label>'+
     '<label class="field"><span>סיסמה'+(e.id?' (ריק = ללא שינוי)':'')+'</span><input id="u-pass" type="text" value=""></label>'+
-    '<label class="field"><span>הרשאה</span><select id="u-role">'+opt('מלמד — כיתה אחת','teacher',e.role)+opt('מנהל — כל המוסד','admin',e.role)+'</select></label>'+
-    '<label class="field"><span>כיתה (למלמד)</span><select id="u-cls">'+opt('—','',e.cls)+S.config.classes.map(c=>opt(c,c,e.cls)).join('')+'</select></label>'+
+    '<label class="field"><span>הרשאה</span><select id="u-role">'+opt('מורה','teacher',e.role)+opt('מנהל — כל המוסד','admin',e.role)+'</select></label>'+
+    '<label class="field"><span>המורה במערכת השעות</span><select id="u-tch">'+opt('—','',e.teacher)+teachersList().map(t=>opt(t,t,e.teacher)).join('')+'</select></label>'+
   '</div><div class="row"><button class="btn" data-v="primary" data-act="user-save">שמירה</button>'+
   '<button class="btn" data-v="ghost" data-act="user-cancel">ביטול</button></div></div>';
 }
@@ -1437,9 +1591,9 @@ function render(){
   document.getElementById('brandName').textContent=S.config.name;
   const bl=document.getElementById('brandLogo');
   if(S.config.logo){bl.src=S.config.logo;bl.style.display='block';}else bl.style.display='none';
-  document.getElementById('brandSub').textContent=isAdmin()?'ניהול המוסד':S.me.cls;
+  document.getElementById('brandSub').textContent=isAdmin()?'ניהול המוסד':(myClasses().length?'מחנך '+myClasses().join(', '):'מורה');
   document.getElementById('nav').innerHTML=tabsFor().map(t=>'<button data-tab="'+t[0]+'" data-on="'+(S.tab===t[0]?1:0)+'">'+t[1]+'</button>').join('');
-  document.getElementById('who').innerHTML='<b>'+esc(S.me.user)+'</b>'+(isAdmin()?'מנהל':'מלמד '+esc(S.me.cls))+
+  document.getElementById('who').innerHTML='<b>'+esc(S.me.user)+'</b>'+(isAdmin()?'מנהל':(myClasses().length?'מחנך '+esc(myClasses().join(', ')):'מורה'))+
     '<div style="margin-top:8px"><button class="btn sm" data-act="logout" style="width:100%">יציאה</button></div>';
   const map={dash:viewDash,review:viewReview,students:viewStudents,mark:viewMark,tasks:viewTasks,
     messages:viewMessages,reports:viewReports,staff:viewStaff,schedule:viewSchedule,settings:viewSettings,import:viewImport,card:viewCard};
@@ -1455,7 +1609,7 @@ function render(){
 function goTab(t){
   S.tab=t;S.editStudent=null;S.editStaff=null;S.editUser=null;S.importPreview=null;S.ttSlot=null;S.ttEdit=null;S.ttImport=null;
   if(S.tab!=='review'){S.revIdx=null;}
-  if(S.tab==='mark'){S.draft=Object.assign({},S.att[S.markDate]||{});S.dirty=false;}
+  if(S.tab==='mark'){S.draft=Object.assign({},S.att[S.markDate]||{});S.dirty=false;S.markLesson=null;S.ldirty=false;}
   render();
 }
 document.getElementById('nav').addEventListener('click',function(e){
@@ -1488,6 +1642,7 @@ document.getElementById('main').addEventListener('click',async function(e){
   const el=e.target.closest('[data-act]');if(!el)return;
   const a=el.dataset.act,id=el.dataset.id;
   if(a.indexOf('tt-')===0||a.indexOf('per-')===0)return ttAction(a,el);
+  if(a.indexOf('lm-')===0||a==='mark-view')return markAction(a,el);
 
   if(a==='logout')return logout();
   if(a==='goto-mark'){S.tab='mark';if(el.dataset.cls)S.markCls=el.dataset.cls;S.draft=Object.assign({},S.att[S.markDate]||{});S.dirty=false;return render();}
@@ -1619,14 +1774,14 @@ document.getElementById('main').addEventListener('click',async function(e){
   if(a==='user-cancel'){S.editUser=null;return render();}
   if(a==='user-save'){
     const g=i=>document.getElementById(i).value;
-    const name=g('u-user').trim(),pass=g('u-pass'),role=g('u-role'),cls=g('u-cls');
+    const name=g('u-user').trim(),pass=g('u-pass'),role=g('u-role'),cls='',tch=g('u-tch');
     if(!name)return toast('צריך שם משתמש');
     if(S.config.users.some(u=>ukey(u.user)===ukey(name)&&u.id!==S.editUser.id))return toast('שם המשתמש כבר קיים');
-    if(role==='teacher'&&!cls)return toast('למלמד צריך לבחור כיתה');
+    if(role==='teacher'&&!tch)return toast('למורה צריך לבחור את השם שלו ממערכת השעות');
     if(!S.editUser.id&&!pass)return toast('צריך סיסמה');
     if(pass&&pass.length<6)return toast('סיסמה של 6 תווים לפחות');
     if(S.editUser.id===S.me.id&&role!=='admin')return toast('אי אפשר להוריד לעצמך את הרשאת המנהל');
-    const base='insts/'+S.inst,data={user:name,role:role,cls:role==='admin'?'':cls,active:true};
+    const base='insts/'+S.inst,data={user:name,role:role,cls:'',teacher:tch||'',active:true};
     toast('שומר…');
     try{
       if(!S.editUser.id){
@@ -1649,7 +1804,7 @@ document.getElementById('main').addEventListener('click',async function(e){
         if(ukey(name)!==ukey(old.user))b.delete(lref);
         if(email)b.set(FS.doc('logins/'+S.inst+'_'+ukey(name)),{email:email,inst:S.inst,key:ukey(name)});
         await b.commit();
-        if(S.me.id===id){S.me.user=name;S.me.cls=data.cls;}
+        if(S.me.id===id){S.me.user=name;S.me.teacher=data.teacher;}
       }
       await reloadMembers();S.editUser=null;toast('המשתמש נשמר');return render();
     }catch(e){return toast(fbErr(e));}
@@ -1690,7 +1845,7 @@ document.getElementById('main').addEventListener('click',async function(e){
   }
   if(a==='del-cls'){S.config.classes=S.config.classes.filter(c=>c!==el.dataset.cls);save(K.config,S.config);return render();}
   if(a==='backup'){
-    download('גיבוי '+iso(new Date())+'.json',JSON.stringify({config:S.config,students:S.students,staff:S.staff,att:S.att,reviews:S.reviews,tasks:S.tasks,timetable:S.timetable},null,2),'application/json');
+    download('גיבוי '+iso(new Date())+'.json',JSON.stringify({config:S.config,students:S.students,staff:S.staff,att:S.att,reviews:S.reviews,tasks:S.tasks,timetable:S.timetable,latt:S.latt},null,2),'application/json');
     return toast('הגיבוי ירד');
   }
   if(a==='restore')return document.getElementById('restoreFile').click();
@@ -1708,6 +1863,7 @@ document.getElementById('main').addEventListener('change',function(e){
   if(el.id==='ttFile'&&el.files&&el.files[0]){const f=el.files[0];el.value='';return handleTtFile(f);}
   if(el.dataset&&el.dataset.ttf){ttCapture();if(el.dataset.ttstu||(el.tagName==='INPUT'&&el.type!=='checkbox'))return;return render();}
   if(el.dataset&&el.dataset.per!==undefined)return;
+  if(el.dataset&&el.dataset.hr!==undefined){S.config.homeroom=Object.assign({},S.config.homeroom||{});if(el.value)S.config.homeroom[el.dataset.hr]=el.value;else delete S.config.homeroom[el.dataset.hr];save(K.config,S.config);toast('המחנך עודכן');return render();}
   if(el.dataset&&el.dataset.map!==undefined&&S.importPreview&&S.importPreview.map){
     const i=+el.dataset.map,t=el.value,p=S.importPreview;
     if(['extra','skip'].indexOf(t)<0)p.map.forEach(function(x,j){if(j!==i&&x===t)p.map[j]='extra';});
@@ -1735,15 +1891,15 @@ document.getElementById('main').addEventListener('change',function(e){
     r.onload=function(){try{
       const d=JSON.parse(r.result);
       const keepUsers=S.config.users;S.config=Object.assign({},d.config||S.config,{users:keepUsers});S.students=d.students||[];S.staff=d.staff||[];
-      S.att=d.att||{};S.reviews=d.reviews||[];S.tasks=d.tasks||[];if(d.timetable)S.timetable=d.timetable;
-      [[K.config,S.config],[K.students,S.students],[K.staff,S.staff],[K.att,S.att],[K.reviews,S.reviews],[K.tasks,S.tasks],[K.timetable,S.timetable]].forEach(p=>save(p[0],p[1]));
+      S.att=d.att||{};S.reviews=d.reviews||[];S.tasks=d.tasks||[];if(d.timetable)S.timetable=d.timetable;if(d.latt)S.latt=d.latt;LIDX=null;
+      [[K.config,S.config],[K.students,S.students],[K.staff,S.staff],[K.att,S.att],[K.reviews,S.reviews],[K.tasks,S.tasks],[K.timetable,S.timetable],[K.latt,S.latt]].forEach(p=>save(p[0],p[1]));
       toast('הגיבוי נטען');render();
     }catch(err){toast('הקובץ לא תקין');}};
     r.readAsText(el.files[0]);return;
   }
   const k=el.dataset.ch;if(!k)return;
   S[k]=el.value;
-  if(k==='markDate'){S.draft=Object.assign({},S.att[S.markDate]||{});S.dirty=false;}
+  if(k==='markDate'){S.draft=Object.assign({},S.att[S.markDate]||{});S.dirty=false;S.markLesson=null;S.ldirty=false;}
   if(k==='revDate'&&S.revIdx!==null)loadRevDraft();
   render();
 });

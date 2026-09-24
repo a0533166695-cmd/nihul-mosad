@@ -564,6 +564,7 @@ async function doLogin(){
   const u=document.getElementById('lu').value.trim(),p=document.getElementById('lp').value;
   const err=document.getElementById('loginErr'),btn=document.getElementById('loginBtn');
   if(!inst||!u||!p){err.textContent='נא למלא קוד מוסד, שם משתמש וסיסמה';return;}
+  if(!/^[a-z0-9-]{2,30}$/.test(inst)){err.textContent='קוד המוסד כתוב באנגלית בלבד (אותיות קטנות, ספרות ומקף), למשל: afula';return;}
   if(!FS){err.textContent='אין חיבור לשרת. בדקו את האינטרנט (או חסימה בנטפרי)';return;}
   err.textContent='';btn.disabled=true;btn.textContent='מתחבר…';
   try{
@@ -1445,6 +1446,7 @@ document.getElementById('main').addEventListener('input',function(e){
   }
   firebase.initializeApp(FB_CONFIG);
   FS=firebase.firestore();AUTH=firebase.auth();
+  try{FS.settings({experimentalForceLongPolling:true,merge:true});}catch(e){}
   try{await FS.enablePersistence({synchronizeTabs:true});}catch(e){}
   const user=await new Promise(r=>{const un=AUTH.onAuthStateChanged(x=>{un();r(x);});});
   let ok=false;
